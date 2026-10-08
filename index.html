@@ -176,14 +176,14 @@ table + table, .scroll + .scroll{margin-top:12px}
   border-radius:8px;padding:10px 14px;font-family:"Barlow Condensed",Arial,sans-serif;font-size:17px;display:flex;justify-content:space-between;gap:10px;align-items:center}
 #appbar button{font:inherit;background:var(--flag);color:#14202B;border:0;border-radius:6px;padding:6px 12px;font-weight:700}
 @media (max-width:420px){.applog form{grid-template-columns:1fr}}
-.runbtn{display:inline-block;margin-top:12px;background:var(--flag);color:#14202B;text-decoration:none;font-family:"Barlow Condensed",Arial,sans-serif;font-weight:700;font-size:19px;padding:8px 16px;border-radius:6px}
+.runbtn{display:inline-block;margin-top:12px;background:var(--flag);color:#14202B;text-decoration:none;font-family:"Barlow Condensed",Arial,sans-serif;font-weight:700;font-size:19px;padding:8px 16px;border-radius:6px;border:0;cursor:pointer;margin-right:8px;vertical-align:top}.ghostbtn{background:rgba(255,255,255,.18);color:#fff}
 </style>
 </head>
 <body>
 <header><div class="wrap">
   <p>Thursday, October 8, 2026 &nbsp;/&nbsp; Edition 15</p>
   <h1>Football Brief</h1>
-  <span class="stamp">Updated 10:20 a.m. PT · game day: Bucs at Cowboys 5:15</span><br><a class="runbtn" href="https://claude.ai/code/session_01KyqEyHbiBAUVaBETN2uhGK" target="_blank" rel="noopener">Run my brief in Claude →</a>
+  <span class="stamp">Updated 10:20 a.m. PT · game day: Bucs at Cowboys 5:15</span><br><a class="runbtn" href="https://claude.ai/code/session_01KyqEyHbiBAUVaBETN2uhGK" target="_blank" rel="noopener">Run my brief in Claude →</a> <button type="button" class="runbtn ghostbtn" id="refreshBtn">↻ Refresh</button>
 </div></header>
 
 <main><div class="wrap">
@@ -1447,6 +1447,9 @@ var f=$('lgForm');if(f)f.onsubmit=function(e){e.preventDefault();var v=new FormD
 $('lgExp').onclick=function(){var a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(L,null,1)],{type:'application/json'}));
  a.download='bet-log-'+new Date().toISOString().slice(0,10)+'.json';document.body.appendChild(a);a.click();a.remove()};
 $('lgImp').onchange=function(){var file=this.files[0];if(!file)return;file.text().then(function(t){try{var x=JSON.parse(t);if(Array.isArray(x)){L=x;save();render()}}catch(e){}})};
+var rb=$('refreshBtn');if(rb)rb.onclick=function(){rb.textContent='Checking…';
+ var go=function(){location.reload()};
+ if(navigator.serviceWorker&&navigator.serviceWorker.getRegistration){navigator.serviceWorker.getRegistration().then(function(r){return r?r.update():null}).then(function(){setTimeout(go,600)},go)}else go()};
 render();
 // offline + update support
 if('serviceWorker' in navigator && location.protocol!=='file:'){
