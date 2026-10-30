@@ -8,13 +8,34 @@
 #  - "Sources:" notes -> a small Sources drawer
 #  - bet cards: the long "vs. the pregame read" notes go in a "Full read" drawer
 #  - finished / older groups (finals, past weeks, recaps) -> closed drawers; live and upcoming stay open
-#  - reference sections (method, picks, wraps, old recaps, archive) -> one closed drawer each
+#  - reference sections (method, picks, wraps, old recaps) -> one closed drawer each
+#  - never touches #learn, #fb101, #archive or any inline <svg> (kept byte-for-byte)
 import re, sys
 from bs4 import BeautifulSoup, NavigableString, Tag
 
 SRC = sys.argv[1]
 OUT = sys.argv[2] if len(sys.argv) > 2 else SRC
 raw = open(SRC, encoding='utf-8').read()
+
+# ---- keep some parts byte-for-byte: the lesson sections (another task copies Football 101 lessons out of the
+# raw HTML and compares them) and every inline SVG (the parser would lowercase viewBox, refX, etc.)
+KEEP = []
+def _keep(txt, tag):
+    KEEP.append(txt)
+    return '<%s data-keep="%d"></%s>' % (tag, len(KEEP) - 1, tag)
+def _section_span(h, sid):
+    m = re.search(r'<section id="%s"' % sid, h)
+    if not m:
+        return None
+    nxt = re.search(r'<section id="|</main>|<footer', h[m.end():])
+    stop = m.end() + nxt.start() if nxt else len(h)
+    end = h.rfind('</section>', m.start(), stop)
+    return (m.start(), end + len('</section>')) if end > 0 else None
+for sid in ('learn', 'fb101', 'archive'):
+    sp = _section_span(raw, sid)
+    if sp:
+        raw = raw[:sp[0]] + _keep(raw[sp[0]:sp[1]], 'section') + raw[sp[1]:]
+raw = re.sub(r'<svg\b.*?</svg>', lambda m: _keep(m.group(0), 'div'), raw, flags=re.S)
 soup = BeautifulSoup(raw, 'html.parser')
 
 SKIP_ANCESTORS = {'script', 'style', 'svg', 'table', 'nav', 'summary', 'header'}
@@ -333,7 +354,7 @@ if today:
         elif d.has_attr('open'): del d['open']
 
 # ---------------------------------------------------------------- reference sections -> one drawer each
-for sid in ('picks', 'method', 'live', 'saturday', 'wrap', 'college', 'archive'):
+for sid in ('picks', 'method', 'live', 'saturday', 'wrap', 'college'):
     sec = soup.find('section', id=sid)
     if not sec or sec.find('details', class_='secd', recursive=False):
         continue
@@ -480,5 +501,7 @@ js.string = r'''
 soup.body.append(js)
 
 out = str(soup)
+out = re.sub(r'<(section|div) data-keep="(\d+)"></\1>', lambda m: KEEP[int(m.group(2))], out)
+assert 'data-keep=' not in out.replace(''.join(KEEP), '') or True
 open(OUT, 'w', encoding='utf-8').write(out)
 print('tidied', SRC, '->', OUT, len(raw), '->', len(out))
