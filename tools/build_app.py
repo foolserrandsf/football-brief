@@ -6,6 +6,9 @@ import sys
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = sys.argv[1] if len(sys.argv) > 1 else os.path.join(REPO, 'src', 'football-brief.html')
 OUT = REPO
+# easy-read layer first (short lines, drawers, stacked tables); safe to run repeatedly
+import subprocess
+subprocess.run([sys.executable, os.path.join(REPO, 'tools', 'tidy_brief.py'), SRC], check=True)
 html = open(SRC, encoding='utf-8').read()
 
 # icons: kept as-is in icons/ (helmet)
