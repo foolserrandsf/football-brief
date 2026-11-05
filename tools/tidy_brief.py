@@ -17,6 +17,15 @@ SRC = sys.argv[1]
 OUT = sys.argv[2] if len(sys.argv) > 2 else SRC
 raw = open(SRC, encoding='utf-8').read()
 
+# ---- if the page was saved with the artifact viewer's wrapper around it (a second <!DOCTYPE html> inside),
+# keep only the real document; otherwise the wrapper's <head> styles load before the page's own and lose.
+_docs = list(re.finditer(r'<!DOCTYPE html>\s*<html lang="en">', raw, re.I))
+if _docs and _docs[-1].start() > 0:
+    raw = raw[_docs[-1].start():]
+    _end = raw.find('</html>')
+    if _end > 0:
+        raw = raw[:_end + len('</html>')]
+
 # ---- keep some parts byte-for-byte: the lesson sections (another task copies Football 101 lessons out of the
 # raw HTML and compares them) and every inline SVG (the parser would lowercase viewBox, refX, etc.)
 KEEP = []
@@ -321,11 +330,18 @@ def card_to_drawer(card):
 def has_action(d):
     return d.select_one('.pill.o') is not None or d.select_one('.lbc.wait .pill.o') is not None
 
+def body_of(sec):
+    """The section itself, or the section drawer it was put in on an earlier run."""
+    if sec is None:
+        return None
+    d = sec.find('details', class_='secd', recursive=False)
+    return d if d is not None else sec
+
 for sid in ('mybets', 'bets', 'ahead', 'psu', 'uh', 'wrap', 'now'):
-    sec = soup.find('section', id=sid)
+    sec = body_of(soup.find('section', id=sid))
     if sec: wrap_groups(sec, None)
 
-today = soup.find('section', id='today')
+today = body_of(soup.find('section', id='today'))
 if today:
     for c in today.find_all('div', class_='card', recursive=False):
         card_to_drawer(c)
@@ -333,7 +349,7 @@ if today:
 
 # open/closed state (re-evaluated every run)
 for sid in ('mybets', 'bets', 'ahead', 'psu', 'uh', 'now'):
-    sec = soup.find('section', id=sid)
+    sec = body_of(soup.find('section', id=sid))
     if not sec: continue
     for d in sec.find_all('details', class_='grp', recursive=False):
         title = group_title(d.summary)
@@ -353,24 +369,234 @@ if today:
         if i == 0: d['open'] = ''
         elif d.has_attr('open'): del d['open']
 
-# ---------------------------------------------------------------- reference sections -> one drawer each
-for sid in ('picks', 'method', 'live', 'saturday', 'wrap', 'college'):
-    sec = soup.find('section', id=sid)
-    if not sec or sec.find('details', class_='secd', recursive=False):
-        continue
-    h2 = sec.find('h2', recursive=False)
-    if not h2: continue
-    d = soup.new_tag('details', attrs={'class': 'secd'})
+# ---------------------------------------------------------------- every section below "Your bets" -> one drawer
+# (icon, title shown on the drawer); the order here is the order on the page
+DRAWERS = [
+    ('now', '⚡', 'Right now'),
+    ('today', '🏁', 'Latest finals'),
+    ('bets', '📝', 'Full write-ups for every pick'),
+    ('ahead', '📅', "This week's games and lines"),
+    ('pnl', '💵', 'Results and net'),
+    ('psu', '🦁', 'Penn State desk'),
+    ('uh', '🌺', "Hawai'i desk"),
+    ('learn', '📈', 'Market 101'),
+    ('fb101', '🏈', 'Football 101'),
+    ('picks', '⚖️', "The brief's picks vs. yours"),
+    ('method', '✅', 'How the brief picks bets'),
+    ('wrap', '🗞️', 'Weekly wrap'),
+    ('college', '📊', 'Trends and metrics'),
+    ('archive', '🗄️', 'Lesson archive'),
+    ('live', '🕰️', 'Old recap: Oct 4 finals'),
+    ('saturday', '🕰️', 'Old recap: Oct 3'),
+]
+DRAWER_IDS = [d[0] for d in DRAWERS]
+
+def lesson_hint(sid):
+    """Today's lesson title, read from the kept (untouched) lesson section."""
+    for k in KEEP:
+        if k.startswith('<section id="%s"' % sid):
+            m = (re.search(r'<details class="lesson"[^>]*\bopen\b[^>]*>\s*<summary>(.*?)</summary>', k, re.S)
+                 or re.search(r'<h3[^>]*>(.*?)</h3>', k, re.S))
+            if m:
+                t = re.sub(r'<[^>]+>', '', m.group(1)).strip()
+                return 'Today: ' + (t if len(t) < 90 else t[:87].rstrip() + '…')
+    return 'Tap to open'
+
+def make_summary(sid, icon, title, hint_text):
     s = soup.new_tag('summary')
-    rest = [c for c in list(sec.children) if c is not h2]
-    h2.insert_before(d)
-    s.append(h2.extract())
-    hint = soup.new_tag('span', attrs={'class': 'hint'})
-    hint.string = ('Old recap · tap to open' if sid in ('live', 'saturday') else 'Tap to open')
-    s.append(hint)
-    d.append(s)
-    for c in rest:
-        d.append(c.extract())
+    ic = soup.new_tag('span', attrs={'class': 'ico'}); ic.string = icon
+    h = soup.new_tag('h2'); h.string = title
+    hint = soup.new_tag('span', attrs={'class': 'hint'}); hint.string = hint_text
+    s.append(ic); s.append(h); s.append(hint)
+    return s
+
+for sid, icon, title in DRAWERS:
+    sec = soup.find('section', id=sid)
+    if sec is not None:
+        d = sec.find('details', class_='secd', recursive=False)
+        if d is None:
+            h2 = sec.find('h2', recursive=False)
+            sub = sec.find('p', class_='h2sub', recursive=False)
+            hint_text = sub.get_text(' ', strip=True) if sub is not None else 'Tap to open'
+            if sub is not None:
+                sub.decompose()
+            if h2 is not None:
+                h2.decompose()
+            d = soup.new_tag('details', attrs={'class': 'secd'})
+            kids = list(sec.children)
+            sec.insert(0, d)
+            for c in kids:
+                d.append(c.extract())
+            d.insert(0, make_summary(sid, icon, title, hint_text))
+        else:
+            # earlier runs: refresh the icon and title, keep the hint
+            old = d.find('summary', recursive=False)
+            hint = old.find('span', class_='hint') if old is not None else None
+            hint_text = hint.get_text(strip=True) if hint is not None else 'Tap to open'
+            if old is not None:
+                old.replace_with(make_summary(sid, icon, title, hint_text))
+        d['id'] = 'd-' + sid
+        if d.has_attr('open'):
+            del d['open']
+        continue
+    # kept lesson sections: wrap the placeholder, never the section text itself
+    ph = None
+    for t in soup.find_all('section', attrs={'data-keep': True}):
+        if KEEP[int(t['data-keep'])].startswith('<section id="%s"' % sid):
+            ph = t; break
+    if ph is None:
+        continue
+    par = ph.parent
+    if isinstance(par, Tag) and par.name == 'details' and 'secd' in cls(par):
+        old = par.find('summary', recursive=False)
+        if old is not None:
+            old.replace_with(make_summary(sid, icon, title, lesson_hint(sid)))
+        par['id'] = 'd-' + sid
+        continue
+    d = soup.new_tag('details', attrs={'class': 'secd kept', 'id': 'd-' + sid})
+    ph.insert_before(d)
+    d.append(make_summary(sid, icon, title, lesson_hint(sid)))
+    d.append(ph.extract())
+
+# ---------------------------------------------------------------- bet board (from the JSON the daily edition writes)
+import json, html as _html
+bb_data_tag = soup.find('script', id='betboard-data')
+for old in soup.select('#betboard'):
+    old.decompose()
+
+def esc(s):
+    return _html.escape(str(s or ''), quote=True)
+
+def cents(p):
+    m = re.search(r'(\d+(?:\.\d+)?)', str(p or ''))
+    return float(m.group(1)) / 100 if m else None
+
+def pays(stake, price):
+    """Kalshi: each contract pays $1; the fee (about 7% x p x (1-p) a contract) is added to the cost."""
+    try:
+        st = float(re.sub(r'[^\d.]', '', str(stake)))
+    except ValueError:
+        return None
+    if not price or price <= 0 or price >= 1:
+        return None
+    return st / (price + 0.07 * price * (1 - price))
+
+STATUS = {'open': ('Open', 'Buy at the max price or less'), 'placed': ('You bought it', ''),
+          'won': ('Won', ''), 'lost': ('Lost', ''), 'off': ('Skipped', ''), 'push': ('Push', ''),
+          'live': ('Live', ''), 'watch': ('Watching', 'Not a buy yet')}
+
+if bb_data_tag is not None and bb_data_tag.string:
+    try:
+        bb = json.loads(bb_data_tag.string)
+    except ValueError:
+        bb = None
+    if bb and bb.get('picks'):
+        picks = bb['picks']
+        n = len([p for p in picks if p.get('status') != 'off'])
+        won = len([p for p in picks if p.get('status') == 'won'])
+        lost = len([p for p in picks if p.get('status') == 'lost'])
+        openn = len([p for p in picks if p.get('status') in ('open', 'placed', 'live', 'watch')])
+        out = ['<section id="betboard" class="bb">',
+               '<div class="bb-head"><h2>🎯 This week\'s bets</h2>',
+               '<p class="bb-sub">%s · updated %s</p>' % (esc(bb.get('week')), esc(bb.get('updated'))),
+               '<div class="bb-score"><span><b>%d</b>bets</span><span><b>%d</b>to buy</span><span class="w"><b>%d</b>won</span><span class="l"><b>%d</b>lost</span></div>' % (n, openn, won, lost)]
+        if bb.get('how'):
+            out.append('<p class="bb-how">%s</p>' % esc(bb['how']))
+        out.append('</div>')
+        day = None
+        for p in picks:
+            if p.get('day') != day:
+                day = p.get('day')
+                out.append('<p class="bb-day">%s</p>' % esc(day))
+            st = p.get('status', 'open')
+            lab, sub = STATUS.get(st, (st.title(), ''))
+            tier = p.get('tier', 'pick')
+            price = cents(p.get('max'))
+            pay = pays(p.get('stake', '$5'), price)
+            chance = p.get('chance')
+            cnum = cents(chance)
+            out.append('<article class="bb-card tier-%s st-%s" id="bb-%s">' % (esc(tier), esc(st), esc(p.get('id'))))
+            out.append('<div class="bb-top"><span class="bb-tier">%s · %s</span><span class="bb-st">%s</span></div>'
+                       % ('PICK' if tier == 'pick' else 'LEAN', esc(p.get('stake', '$5')), esc(lab)))
+            out.append('<p class="bb-game">%s</p>' % esc(p.get('game')))
+            out.append('<p class="bb-when">%s</p>' % esc(' · '.join(x for x in (p.get('time'), p.get('tv')) if x)))
+            out.append('<div class="bb-tap"><span class="bb-k">Tap</span><span class="bb-m">“%s”</span><span class="bb-side side-%s">%s</span></div>'
+                       % (esc(p.get('market')), esc(str(p.get('side', '')).lower()), esc(p.get('side'))))
+            chips = []
+            if p.get('max'):
+                chips.append('<span>Max <b>%s</b></span>' % esc(p.get('max')))
+            if pay:
+                chips.append('<span>Pays about <b>$%.2f</b></span>' % pay)
+            if chance:
+                chips.append('<span>Wins about <b>%s</b></span>' % esc(chance))
+            out.append('<div class="bb-chips">%s</div>' % ''.join(chips))
+            if cnum:
+                out.append('<div class="bb-meter" aria-hidden="true"><i style="width:%d%%"></i><s style="left:%d%%"></s></div>'
+                           % (round(cnum * 100), round((price or 0) * 100)))
+                out.append('<p class="bb-mk">bar = the brief\'s win chance · line = the price you pay</p>')
+            if p.get('result'):
+                out.append('<p class="bb-res">%s</p>' % esc(p['result']))
+            why = p.get('why') or []
+            if why:
+                out.append('<ul class="bb-why">%s</ul>' % ''.join('<li>%s</li>' % esc(w) for w in why))
+            more = []
+            if p.get('risk'):
+                more.append('<p><b>Risk:</b> %s</p>' % esc(p['risk']))
+            if p.get('off'):
+                more.append('<p><b>Skip it if:</b> %s</p>' % esc(p['off']))
+            if p.get('more'):
+                more.append('<p><a href="#%s">Full write-up ↓</a></p>' % esc(p['more']))
+            if more:
+                out.append('<details class="bb-more"><summary>Risks and when to skip</summary>%s</details>' % ''.join(more))
+            out.append('</article>')
+        if bb.get('passes'):
+            out.append('<details class="bb-more bb-pass"><summary>Games the brief is skipping (%d)</summary><ul>%s</ul></details>'
+                       % (len(bb['passes']), ''.join('<li>%s</li>' % esc(x) for x in bb['passes'])))
+        out.append('</section>')
+        board = frag('\n'.join(out))
+        anchor = soup.select_one('#gametimes') or soup.select_one('#starthere') or soup.select_one('main nav.toc')
+        if anchor is not None:
+            anchor.insert_after(board)
+        else:
+            soup.select_one('main .wrap').insert(0, board)
+
+# ---------------------------------------------------------------- page order: start here, game times, bet board, your bets, drawers
+mybets = soup.find('section', id='mybets')
+if mybets is not None:
+    gt = soup.select_one('#gametimes')
+    sh = soup.select_one('#starthere')
+    bbs = soup.select_one('#betboard')
+    first = mybets
+    # start here -> bet board -> game times -> your bets
+    for el in [x for x in (sh, bbs, gt) if x is not None]:
+        first.insert_before(el.extract())
+    prev = mybets
+    for sid in DRAWER_IDS:
+        sec = soup.find('section', id=sid)
+        if sec is None:
+            ph = None
+            for t in soup.find_all('section', attrs={'data-keep': True}):
+                if KEEP[int(t['data-keep'])].startswith('<section id="%s"' % sid):
+                    ph = t; break
+            sec = ph.parent if ph is not None and ph.parent is not None and ph.parent.name == 'details' else ph
+        if sec is None:
+            continue
+        prev.insert_after(sec.extract())
+        prev = sec
+
+# ---------------------------------------------------------------- bottom tab bar (replaces the long row of section chips)
+for old in soup.select('#tabbar'):
+    old.decompose()
+hdr = soup.find('header')
+if hdr is not None:
+    hdr['id'] = 'top'
+TABS = [('#top', '🏠', 'Today'), ('#betboard', '🎯', 'Bets'), ('#gametimes', '🕐', 'Games'),
+        ('#mybets', '🧾', 'Mine'), ('#d-fb101', '📚', 'Learn')]
+if soup.select_one('#betboard') is None:
+    TABS[1] = ('#d-bets', '🎯', 'Bets')
+bar = frag('<nav id="tabbar" aria-label="Sections">%s</nav>' % ''.join(
+    '<a href="%s"><span>%s</span>%s</a>' % (h, i, t) for h, i, t in TABS))
+soup.body.append(bar)
 
 # ---------------------------------------------------------------- tables -> stacked rows on phones
 for tb in soup.select('main table'):
@@ -484,6 +710,86 @@ table{font-size:14px;min-width:620px}
   table.stack td:first-child::before{display:none!important}
   table.stack td:empty{display:none}
 }
+/* ---- app layout: compact header, bottom tabs, bet board, one drawer per section ---- */
+body{padding-bottom:calc(84px + env(safe-area-inset-bottom,0px))}
+header .wrap{padding-top:14px;padding-bottom:24px}
+header p{font-size:13px;opacity:.85}
+header h1{font-size:34px;margin-top:2px}
+header .stamp{margin-top:6px}
+header::after{bottom:6px;height:6px}
+nav.toc{display:none!important}
+main .wrap{padding-top:4px}
+#tabbar{position:fixed;left:0;right:0;bottom:0;z-index:40;display:flex;justify-content:space-around;
+  background:var(--card);border-top:1px solid var(--line);padding:6px 4px calc(6px + env(safe-area-inset-bottom,0px));
+  box-shadow:0 -4px 16px rgba(0,0,0,.06)}
+#tabbar a{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;text-decoration:none;color:var(--muted);
+  font-size:12px;font-weight:700;padding:4px 0;border-radius:10px}
+#tabbar a span{font-size:22px;line-height:1}
+#tabbar a.on{color:var(--field);background:var(--field-soft)}
+#appbar{bottom:calc(76px + env(safe-area-inset-bottom,0px))!important}
+.runbtn{font-size:15px!important;padding:6px 12px!important;margin-top:8px!important;border-radius:999px!important}
+header br{display:none}
+.starthere{margin-top:14px}
+.starthere li{font-size:16px}
+/* section drawers: one tidy list under "Your bets" */
+details.secd>summary{display:grid;grid-template-columns:34px 1fr;align-items:center;column-gap:8px;padding:14px 44px 14px 12px}
+details.secd>summary .ico{grid-row:span 2;font-size:24px;line-height:1;text-align:center}
+details.secd>summary h2{font-size:21px;line-height:1.15;margin:0}
+details.secd>summary .hint{grid-column:2;font-size:13px;margin:2px 0 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+details.secd[open]>summary .hint{display:block}
+details.secd[open]>summary{border-bottom:1px solid var(--line);background:var(--field-soft)}
+details.secd>*:not(summary):first-of-type{margin-top:12px}
+details.secd.kept>section{margin-top:0}
+details.secd.kept>section>h2:first-child{display:none}
+section:has(>details.secd){margin-top:0}
+#mybets{margin-top:22px}
+#mybets>h2::before{content:"🧾 "}
+/* bet board */
+.bb{margin-top:16px}
+.bb-head{background:var(--ink);color:var(--paper);border-radius:14px;padding:14px 16px 12px}
+.bb-head h2{color:var(--paper);border:0;padding:0;margin:0;font-size:28px}
+.bb-sub{margin:2px 0 10px;font-size:13px;opacity:.8}
+.bb-score{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.bb-score span{background:rgba(255,255,255,.1);border-radius:10px;text-align:center;padding:6px 0 5px;font-size:12px;font-weight:700;letter-spacing:.03em}
+.bb-score b{display:block;font-family:"Barlow Condensed",Arial,sans-serif;font-size:26px;line-height:1}
+.bb-score .w b{color:#7DDB9C} .bb-score .l b{color:#F28B82}
+.bb-how{margin:10px 0 0;font-size:13px;opacity:.85;max-width:none}
+.bb-day{margin:18px 0 6px;font-size:13px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--field)}
+.bb-card{background:var(--card);border:1px solid var(--line);border-left:6px solid var(--flag);border-radius:12px;padding:12px 14px;margin:0 0 10px}
+.bb-card.tier-lean{border-left-color:#8FB3E8}
+.bb-card.st-won{border-left-color:var(--field)} .bb-card.st-lost{border-left-color:#B3261E}
+.bb-card.st-off{opacity:.6;border-left-color:var(--line)}
+.bb-top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.bb-tier{font-size:12px;font-weight:700;letter-spacing:.05em;color:var(--muted)}
+.bb-st{font-size:12px;font-weight:700;border-radius:999px;padding:2px 10px;background:var(--flag);color:#14202B}
+.st-placed .bb-st,.st-live .bb-st{background:#8FB3E8;color:#14202B}
+.st-won .bb-st{background:var(--field);color:#fff} .st-lost .bb-st{background:#B3261E;color:#fff}
+.st-off .bb-st,.st-watch .bb-st{background:var(--line);color:var(--ink)}
+.bb-game{font-family:"Barlow Condensed",Arial,sans-serif;font-size:24px;font-weight:700;line-height:1.1;margin:6px 0 0}
+.bb-when{margin:2px 0 8px;font-size:14px;color:var(--muted)}
+.bb-tap{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;background:var(--paper);border-radius:10px;padding:10px 12px;font-size:16px;line-height:1.35}
+.bb-k{font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+.bb-m{font-weight:700;flex:1 1 200px}
+.bb-side{font-family:"Barlow Condensed",Arial,sans-serif;font-size:22px;font-weight:700;border-radius:8px;padding:0 12px;color:#fff;background:var(--field)}
+.bb-side.side-no{background:#B3261E}
+.bb-chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 0}
+.bb-chips span{font-size:13px;border:1px solid var(--line);border-radius:999px;padding:3px 10px}
+.bb-meter{position:relative;height:8px;border-radius:4px;background:var(--line);margin:10px 0 2px;overflow:visible}
+.bb-meter i{display:block;height:100%;border-radius:4px;background:var(--field)}
+.bb-meter s{position:absolute;top:-4px;width:2px;height:16px;background:var(--ink)}
+.bb-mk{font-size:11px;color:var(--muted);margin:0 0 4px}
+.bb-res{font-weight:700;margin:8px 0 0}
+.bb-why{list-style:none;padding:0;margin:8px 0 0}
+.bb-why li{position:relative;padding-left:16px;margin:0 0 4px;font-size:15px;line-height:1.4}
+.bb-why li::before{content:"";position:absolute;left:3px;top:8px;width:6px;height:6px;border-radius:50%;background:var(--field)}
+details.bb-more{background:none;border:0;padding:0;margin:6px 0 0}
+details.bb-more>summary{font-family:inherit;font-size:14px;font-weight:700;color:var(--field);display:inline-block}
+details.bb-more p{font-size:15px;margin:6px 0 0}
+details.bb-pass{margin:4px 0 0}
+details.bb-pass li{font-size:15px;margin-bottom:6px}
+.confetti{position:fixed;top:-12px;width:9px;height:14px;z-index:60;pointer-events:none;border-radius:2px;animation:cf 2.6s ease-in forwards}
+@keyframes cf{to{transform:translateY(105vh) rotate(720deg);opacity:.2}}
+@media (prefers-reduced-motion:reduce){.confetti{display:none}}
 '''
 soup.head.append(style)
 js = soup.new_tag('script', attrs={'id': 'tidy-js'})
@@ -496,6 +802,27 @@ js.string = r'''
   document.addEventListener('click', function(e){ var a=e.target.closest && e.target.closest('a[href^="#"]');
     if(a) openTo(a.getAttribute('href').slice(1)); });
   if(location.hash) openTo(location.hash.slice(1));
+  // bottom tabs: highlight the one for the part of the page on screen
+  var tabs=[].slice.call(document.querySelectorAll('#tabbar a'));
+  function mark(){ var y=window.scrollY+120, best=tabs[0], bt=-1;
+    tabs.forEach(function(a){ var el=document.getElementById(a.getAttribute('href').slice(1)); if(!el) return;
+      var t=el.getBoundingClientRect().top+window.scrollY; if(t<=y && t>bt){ bt=t; best=a; } });
+    tabs.forEach(function(a){ a.classList.toggle('on', a===best); }); }
+  window.addEventListener('scroll', mark, {passive:true}); mark();
+  // confetti once for each bet that turned into a win since your last visit
+  try{
+    var won=[].slice.call(document.querySelectorAll('.bb-card.st-won')).map(function(c){return c.id;});
+    var seen=JSON.parse(localStorage.getItem('bbSeenWins')||'[]');
+    var fresh=won.filter(function(id){return seen.indexOf(id)<0;});
+    if(fresh.length){
+      var cols=['#2E6B45','#F2B705','#8FB3E8','#F28B82','#7DDB9C'];
+      for(var i=0;i<70;i++){ var c=document.createElement('i'); c.className='confetti';
+        c.style.left=(Math.random()*100)+'vw'; c.style.background=cols[i%cols.length];
+        c.style.animationDelay=(Math.random()*0.8)+'s'; document.body.appendChild(c);
+        setTimeout(function(n){return function(){n.remove();};}(c), 3600); }
+      localStorage.setItem('bbSeenWins', JSON.stringify(seen.concat(fresh).slice(-200)));
+    }
+  }catch(e){}
 })();
 '''
 soup.body.append(js)

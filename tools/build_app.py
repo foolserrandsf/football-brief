@@ -72,8 +72,7 @@ nav_old = '<a href="#mybets">Your bets</a>'
 assert nav_old in html
 html = html.replace(nav_old, '<a href="#betlog">Bet log</a>' + nav_old, 1)
 
-log_sec = '''<section id="betlog">
-<h2>My bet log</h2>
+log_sec = '''<section id="betlog"><details class="secd" id="d-betlog"><summary><span class="ico">📒</span><h2>My bet log</h2><span class="hint">Saved on this phone · add bets, mark won or lost</span></summary>
 <p>Saved on this phone only. Add each Kalshi bet as you place it, then mark it won, lost or cashed out. Use Export now and then as a backup.</p>
 <div class="applog">
 <div class="lgtiles"><div><b id="lgOpen">0</b>open</div><div><b id="lgRisk">$0</b>at risk</div><div><b id="lgNet">$0</b>settled net</div></div>
@@ -89,7 +88,7 @@ log_sec = '''<section id="betlog">
 <div id="lgList"></div>
 <div class="row"><button class="btn ghost" type="button" id="lgExp">Export backup</button><label class="btn ghost" style="display:inline-block">Import backup<input type="file" id="lgImp" accept="application/json" hidden></label></div>
 </div>
-</section>
+</details></section>
 
 '''
 anchor = '<section id="mybets"'
