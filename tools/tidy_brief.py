@@ -525,7 +525,7 @@ if bb_data_tag is not None and bb_data_tag.string:
             chips = []
             if p.get('max'):
                 chips.append('<span>Max <b>%s</b></span>' % esc(p.get('max')))
-            if pay:
+            if pay and st in ('open', 'watch'):
                 chips.append('<span>Pays about <b>$%.2f</b></span>' % pay)
             if chance:
                 chips.append('<span>Wins about <b>%s</b></span>' % esc(chance))
