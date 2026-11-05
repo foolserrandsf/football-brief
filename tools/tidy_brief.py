@@ -495,7 +495,7 @@ if bb_data_tag is not None and bb_data_tag.string:
         n = len([p for p in picks if p.get('status') != 'off'])
         won = len([p for p in picks if p.get('status') == 'won'])
         lost = len([p for p in picks if p.get('status') == 'lost'])
-        openn = len([p for p in picks if p.get('status') in ('open', 'placed', 'live', 'watch')])
+        openn = len([p for p in picks if p.get('status') == 'open'])
         out = ['<section id="betboard" class="bb">',
                '<div class="bb-head"><h2>🎯 This week\'s bets</h2>',
                '<p class="bb-sub">%s · updated %s</p>' % (esc(bb.get('week')), esc(bb.get('updated'))),
